@@ -32,6 +32,10 @@ import {
 import { GraphqlQueryFilterConditionParser } from './graphql-query-filter-condition.parser';
 import { type WorkspaceSelectQueryBuilder } from 'src/engine/twenty-orm/query-builder/workspace-select-query-builder';
 
+// SQL comparisons against NULL yield NULL, and NOT (NULL) filters the row out:
+// within a negated filter, an unknown condition is considered unmet
+const treatNullConditionAsFalse = (sql: string) => `COALESCE((${sql}), false)`;
+
 export class GraphqlQueryFilterFieldParser {
   private flatObjectMetadata: FlatObjectMetadata;
   private flatFieldMetadataMaps: FlatEntityMaps<OrmFlatFieldMetadata>;
@@ -69,6 +73,7 @@ export class GraphqlQueryFilterFieldParser {
     filterValue: any,
     isFirst = false,
     useDirectTableReference = false,
+    shouldTreatNullAsFalse = false,
   ): void {
     const { fieldMetadata, isReferencedByFieldName } =
       resolveFilterKeyFieldMetadata({
@@ -136,13 +141,14 @@ export class GraphqlQueryFilterFieldParser {
         filterValue,
         isFirst,
         useDirectTableReference,
+        shouldTreatNullAsFalse,
       );
     }
     const [[operator, value]] = Object.entries(filterValue);
 
     assertArrayOperatorValueIsNonEmptyArray({ operator, value, key });
 
-    const { sql, params } = computeWhereConditionParts({
+    const { sql: conditionSql, params } = computeWhereConditionParts({
       operator,
       objectNameSingular,
       key,
@@ -150,6 +156,10 @@ export class GraphqlQueryFilterFieldParser {
       fieldMetadataType: fieldMetadata.type,
       useDirectTableReference,
     });
+
+    const sql = shouldTreatNullAsFalse
+      ? treatNullConditionAsFalse(conditionSql)
+      : conditionSql;
 
     if (isFirst) {
       queryBuilder.where(sql, params);
@@ -292,6 +302,7 @@ export class GraphqlQueryFilterFieldParser {
     fieldValue: any,
     isFirst = false,
     useDirectTableReference = false,
+    shouldTreatNullAsFalse = false,
   ): void {
     const compositeType = compositeTypeDefinitions.get(
       fieldMetadata.type as CompositeFieldMetadataType,
@@ -327,7 +338,7 @@ export class GraphqlQueryFilterFieldParser {
         key: subFieldKey,
       });
 
-      const { sql, params } = computeWhereConditionParts({
+      const { sql: conditionSql, params } = computeWhereConditionParts({
         operator,
         objectNameSingular,
         key: fullFieldName,
@@ -336,6 +347,10 @@ export class GraphqlQueryFilterFieldParser {
         fieldMetadataType: fieldMetadata.type,
         useDirectTableReference,
       });
+
+      const sql = shouldTreatNullAsFalse
+        ? treatNullConditionAsFalse(conditionSql)
+        : conditionSql;
 
       if (isFirst && index === 0) {
         queryBuilder.where(sql, params);
